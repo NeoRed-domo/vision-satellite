@@ -80,3 +80,13 @@ Compatible avec `core/perception/audio_tcp.py` du projet Vision.
 ## Licence
 
 MIT
+
+## Sécurité
+
+**En production, la connexion DOIT être chiffrée.** L'audio brut sur le réseau est interceptable.
+
+Options :
+- **WireGuard tunnel** (recommandé) — les satellites rejoignent le VPN Vision, le TCP reste simple
+- **TLS** — chiffrement au niveau applicatif (`ssl.wrap_socket`)
+
+Le chiffrement sera implémenté avant tout déploiement hors LAN de test.
