@@ -82,6 +82,48 @@ def enumerate_cards() -> List[Tuple[int, str, bool]]:
     return cards
 
 
+def _disable_usb_autosuspend(card_idx: int) -> None:
+    """
+    Empêche le kernel USB de mettre en veille le micro (cause
+    classique des EIO toutes les ~10s sur Jetson Nano / Pi).
+
+    - désactive le timer global d'autosuspend (/sys/module/usbcore)
+    - force power/control=on sur le device USB derrière card{N}
+
+    Les deux opérations sont best-effort : on log à debug si elles
+    échouent (permissions, chemin absent, device non USB...).
+    """
+    try:
+        with open("/sys/module/usbcore/parameters/autosuspend", "w") as f:
+            f.write("-1\n")
+        log.debug("USB autosuspend global désactivé")
+    except OSError as exc:
+        log.debug("autosuspend global non modifiable: %s", exc)
+
+    try:
+        path = os.path.realpath("/sys/class/sound/card{}".format(card_idx))
+    except OSError:
+        return
+    while path and path != "/":
+        if os.path.exists(os.path.join(path, "idVendor")):
+            ctrl = os.path.join(path, "power", "control")
+            try:
+                with open(ctrl, "w") as f:
+                    f.write("on\n")
+                log.info("USB autosuspend désactivé pour card%d (%s)", card_idx, path)
+            except OSError as exc:
+                log.warning("Impossible de forcer power/control=on (%s): %s", ctrl, exc)
+            return
+        path = os.path.dirname(path)
+    log.debug("card%d n'est pas derrière un device USB (pas d'autosuspend à gérer)", card_idx)
+
+
+def _card_index_from_device(device: str) -> Optional[int]:
+    """Extract card index from 'hw:N,X' / 'plughw:N,X' strings."""
+    match = re.match(r"(?:plug)?hw:(\d+)", device)
+    return int(match.group(1)) if match else None
+
+
 def _can_capture(device: str, attempts: int = 5) -> bool:
     """
     Open the device and try several reads. A real mic will deliver at
@@ -145,6 +187,10 @@ def find_capture_device() -> Optional[str]:
     # We try plughw first, then fall back to hw as a last resort.
     for idx, desc, is_usb in candidates:
         kind = "USB" if is_usb else "onboard"
+        if is_usb:
+            # Fixer l'autosuspend AVANT le test — sinon le premier read peut
+            # tomber en EIO sur un device que le kernel a déjà suspendu.
+            _disable_usb_autosuspend(idx)
         for prefix in ("plughw", "hw"):
             device = "{}:{},0".format(prefix, idx)
             if _can_capture(device):
@@ -331,10 +377,15 @@ Exemples:
     # Auto-detect device if not specified
     device = args.device
     if device is None:
-        device = find_usb_mic()
+        device = find_capture_device()
         if device is None:
             log.error("Aucun micro USB détecté. Utilisez --device ou --list-devices.")
             sys.exit(1)
+    else:
+        # Manual --device: also apply the USB autosuspend fix if possible.
+        idx = _card_index_from_device(device)
+        if idx is not None:
+            _disable_usb_autosuspend(idx)
 
     log.info("Vision Audio Satellite")
     log.info("  Serveur: %s:%d", args.host, args.port)
