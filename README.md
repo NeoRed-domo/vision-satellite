@@ -59,6 +59,22 @@ sudo ./install.sh --host 192.168.1.100 --device hw:2,0
 
 ---
 
+## Mise à jour
+
+Pour récupérer la dernière version et relancer le service :
+
+```bash
+cd ~/vision-satellite && git pull && sudo cp vision_satellite.py /opt/vision-satellite/ && sudo systemctl restart vision-satellite
+```
+
+Si `install.sh` a changé (nouveau service systemd, nouvelle règle udev...), relance l'installation complète pour propager les changements :
+
+```bash
+cd ~/vision-satellite && git pull && sudo ./install.sh --host <IP_VISION>
+```
+
+---
+
 ## Vérifier que ça marche
 
 ```bash
