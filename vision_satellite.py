@@ -238,7 +238,11 @@ def list_devices():
 # ============================================================
 
 def spawn_arecord(device: str, rate: int) -> subprocess.Popen:
-    """Lance arecord en streaming continu sur stdout (raw S16_LE)."""
+    """
+    Lance arecord en streaming continu sur stdout (raw S16_LE).
+    Pas de -q : on veut voir les erreurs dans stderr pour diagnostiquer
+    les EOF inattendus.
+    """
     cmd = [
         "arecord",
         "-D", device,
@@ -246,7 +250,6 @@ def spawn_arecord(device: str, rate: int) -> subprocess.Popen:
         "-c", str(CHANNELS),
         "-f", "S16_LE",
         "-t", "raw",
-        "-q",
     ]
     log.info("arecord: %s", " ".join(cmd))
     return subprocess.Popen(
@@ -255,6 +258,17 @@ def spawn_arecord(device: str, rate: int) -> subprocess.Popen:
         stderr=subprocess.PIPE,
         bufsize=0,
     )
+
+
+def _drain_stderr(proc: Optional[subprocess.Popen]) -> str:
+    """Lit stderr dispo sans bloquer. Best-effort."""
+    if proc is None or proc.stderr is None:
+        return ""
+    try:
+        # Le subprocess est mort → read() ne bloquera plus.
+        return proc.stderr.read().decode("utf-8", "replace").strip()
+    except Exception:
+        return ""
 
 
 def connect(host: str, port: int, rate: int, chunk: int) -> socket.socket:
@@ -296,8 +310,8 @@ def stream(host: str, port: int, device: str, rate: int):
         # (Re)lance arecord si mort / jamais lancé
         if proc is None or proc.poll() is not None:
             if proc is not None:
-                err = proc.stderr.read().decode("utf-8", "replace").strip() if proc.stderr else ""
-                log.warning("arecord a quitté (code=%s): %s", proc.returncode, err or "(pas de stderr)")
+                err = _drain_stderr(proc)
+                log.warning("arecord a quitté (code=%s): %s", proc.returncode, err or "(stderr vide)")
                 _kill_proc(proc)
                 time.sleep(0.5)
             proc = spawn_arecord(device, rate)
@@ -325,7 +339,9 @@ def stream(host: str, port: int, device: str, rate: int):
 
         if not data:
             # arecord a fermé stdout → il est mort
-            log.warning("arecord stdout EOF — subprocess mort, relance")
+            err = _drain_stderr(proc)
+            log.warning("arecord stdout EOF — subprocess mort (stderr: %s)",
+                        err or "(vide)")
             _kill_proc(proc)
             proc = None
             continue
