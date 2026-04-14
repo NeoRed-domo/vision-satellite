@@ -1,81 +1,126 @@
 # Vision Satellite
 
-Satellite déporté pour le serveur [Vision](https://github.com/NeoRed-domo/vision) : streame des flux (aujourd'hui audio, demain vidéo) vers le serveur via TCP.
+Satellite déporté pour le serveur [Vision](https://github.com/NeoRed-domo/vision) — streame **audio**, **vidéo** et événements **Bluetooth / Zigbee / Z-Wave** vers le serveur central, via un canal mTLS chiffré et mutuellement authentifié.
 
-Conçu pour **Jetson Nano / Orin**, **Raspberry Pi**, ou tout Linux (ARM64 ou x86_64) avec micro USB.
+Un satellite = un hardware dédié (Raspberry Pi, Jetson, PC Linux…) avec un ou plusieurs périphériques (micro USB, caméra V4L2, dongle Zigbee, etc.). Il s'annonce au serveur Vision avec ses capabilities réelles détectées au boot.
 
-> **État actuel** : streaming audio uniquement. Le support vidéo (caméra USB / CSI) est prévu et réutilisera la même installation.
+Compatible **Debian / Ubuntu / Raspberry Pi OS / JetPack**, ARM64 et x86_64.
 
 ---
 
-## Installation rapide (2 commandes)
+## Installation — 2 commandes
 
-Sur le satellite (Jetson Nano, Pi, etc.), remplace `192.168.1.100` par l'IP du serveur Vision :
+### Étape 1 — Côté Vision (admin)
+
+Dans l'interface admin Vision, ouvre **Satellites** → **+ Nouveau satellite**, donne un nom (ex. "Salon"). Le serveur génère :
+
+- un **QR code** contenant `vision-enroll://IP:9443?token=XXX&fp=YYY&name=Salon&v=1`
+- ou l'équivalent en copy-paste
+
+Le token est valide **10 minutes** et **one-shot** (usage unique, non-réutilisable).
+
+### Étape 2 — Sur le satellite
 
 ```bash
 git clone https://github.com/NeoRed-domo/vision-satellite.git
-cd vision-satellite && sudo ./install.sh --host 192.168.1.100
+cd vision-satellite
+sudo ./install.sh
 ```
 
-C'est tout. Le satellite démarre et se connecte automatiquement.
+Le **wizard interactif** (TUI whiptail) te guide :
 
-### Variante une ligne (sans clone)
+1. Détection OS
+2. Détection hardware (micro, caméra, Bluetooth, Zigbee, Z-Wave) — validation
+3. Test connectivité + config WiFi si besoin (`nmcli`)
+4. Saisie/paste du QR code d'enrollment
+5. Récap + confirmation
+6. Génération keypair ECDSA P-256 + POST `/enroll` avec pinning du cert TLS serveur
+7. Stockage cert signé dans `/opt/vision-satellite/`
+8. Service systemd `vision-satellite` installé
+
+**Mode scripté** (CI / déploiement à distance) :
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/NeoRed-domo/vision-satellite/main/install.sh | sudo bash -s -- --host 192.168.1.100
+sudo ./install.sh --enroll 'vision-enroll://IP:9443?token=XXX&fp=YYY&name=Salon&v=1'
+# ou
+sudo ./install.sh --yes --enroll '...'
 ```
 
 ---
 
-## Options d'installation
+## Sécurité
 
-| Option | Défaut | Description |
-|--------|--------|-------------|
-| `--host` | *(requis)* | IP du serveur Vision |
-| `--port` | `9999` | Port TCP du streamer Vision |
-| `--device` | *(auto)* | Device ALSA (ex: `hw:1,0`) — utile si plusieurs micros |
+### Enrollment
+- Token 128-bit CSPRNG, stocké bcrypt-hashé côté serveur, one-shot, TTL 10min
+- TLS 1.3 obligatoire côté client, **cert pinning** via SHA-256 du cert serveur embarqué dans le QR (anti-MITM même sur réseau hostile)
+- Pas de downgrade possible (satellite et serveur exigent TLS 1.3 min)
 
-**Lister les micros disponibles** avant install :
-```bash
-arecord -l
-```
+### Runtime
+- **mTLS** : satellite et serveur s'authentifient mutuellement via certs signés par la CA interne Vision (Ed25519 root + intermediate, ECDSA P-256 device certs)
+- Révocation instantanée via CRL serveur (supprime satellite dans admin → cert révoqué → refusé à la prochaine reconnexion)
+- Certs TTL 30 jours, rotation automatique 7 jours avant expiry (frame `RENEW_REQUEST` sur le canal mTLS)
+- Frames CBOR typées, max 10MB par frame (anti-DoS)
 
-**Exemple avec micro spécifique** :
-```bash
-sudo ./install.sh --host 192.168.1.100 --device hw:2,0
-```
+Sources conceptuelles : Matter 1.5 (PASE/CASE), Tailscale auth keys, NIST FIPS 203/204 (roadmap post-quantique v1.1).
 
 ---
 
-## Ce que l'installeur fait
+## Capabilities supportées
 
-1. Détecte l'OS (Debian / Ubuntu / JetPack / Raspberry Pi OS)
-2. Installe les dépendances système (`python3`, `libasound2-dev`, `alsa-utils`)
-3. Copie le script dans `/opt/vision-satellite/`
-4. Crée un venv Python et installe `pyalsaaudio`
-5. Écrit la config dans `/opt/vision-satellite/config.env`
-6. Crée et active un service systemd `vision-satellite`
-7. Démarre le service et vérifie qu'il tourne
+| Capability | Détection | Statut |
+|---|---|---|
+| Audio | `arecord -l` + `/proc/asound/cards` + test live | ✅ v1.0 |
+| Vidéo | `v4l2-ctl --all` | ✅ détection ; stream roadmap |
+| Bluetooth | `hciconfig` | ✅ détection ; events roadmap |
+| Zigbee | `/dev/serial/by-id/*` (Sonoff CC2652P, ConBee II, CC2531, zig-a-zig-ah) | ✅ détection ; events roadmap |
+| Z-Wave | `/dev/serial/by-id/*` (Aeotec Z-Stick, Silicon Labs UZB-1, Zooz S700) | ✅ détection ; events roadmap |
 
----
-
-## Mise à jour
-
-Pour récupérer la dernière version et relancer le service :
-
-```bash
-cd ~/vision-satellite && git pull && sudo cp vision_satellite.py /opt/vision-satellite/ && sudo systemctl restart vision-satellite
-```
-
-Si `install.sh` a changé (nouveau service systemd, nouvelle règle udev...), relance l'installation complète pour propager les changements :
-
-```bash
-cd ~/vision-satellite && git pull && sudo ./install.sh --host <IP_VISION>
-```
+Le satellite **redétecte ses capabilities à chaque boot** — débranche le micro, le serveur Vision sera notifié au prochain HELLO.
 
 ---
 
-## Vérifier que ça marche
+## Spécifications techniques
+
+### Audio
+| Paramètre | Valeur |
+|---|---|
+| Sample rate | Détecté natif (16 kHz préféré, fallback 32/44.1/48 kHz) |
+| Canaux | 1 (mono) |
+| Format | int16 LE (PCM brut) |
+| Chunk | 80 ms (1280 samples @ 16 kHz) |
+| Latence | ~80 ms capture + <1 ms mTLS LAN |
+
+Le serveur Vision resample côté pipeline si nécessaire (16 kHz cible).
+
+### Protocole mTLS
+- TLS 1.3 client + serveur auth
+- Frames binaires : `[length:u32 LE][type:u8][payload]`
+- 13 types de frames (HELLO, HELLO_ACK, AUDIO, VIDEO, ZB/ZW/BT events, PING/PONG, RENEW_REQUEST/RESPONSE, ERROR, CONTROL)
+- Payload CBOR pour dicts, raw bytes pour audio/vidéo
+
+### Ressources (streaming audio seul)
+- CPU : < 2 %
+- RAM : < 30 MB
+- Disque : ~10 MB install + certs
+
+---
+
+## Compatibilité hardware
+
+| Plateforme | Statut |
+|---|---|
+| Raspberry Pi 4 / Zero 2W | ✅ recommandé |
+| Raspberry Pi 3B+ | ✅ |
+| Jetson Orin Nano | ✅ (JetPack 6.x) |
+| Jetson Nano (original) | ⚠️ USB mic flaky — cf. [troubleshooting](#jetson-nano-original) |
+| x86_64 Linux (Debian/Ubuntu) | ✅ |
+| WSL2 | ✅ (dev uniquement — audio via WSLg) |
+
+Python 3.7+ (le wizard nécessite `cryptography`, donc pas Python 3.6).
+
+---
+
+## Commandes utiles
 
 ```bash
 # Status du service
@@ -83,78 +128,66 @@ systemctl status vision-satellite
 
 # Logs temps réel
 journalctl -u vision-satellite -f
-```
 
-Tu dois voir des logs du type :
-```
-Connected to 192.168.1.100:9999
-Streaming 16000 Hz mono int16...
-```
-
----
-
-## Specs techniques
-
-| Paramètre | Valeur |
-|-----------|--------|
-| Sample rate | 16 000 Hz |
-| Canaux | 1 (mono) |
-| Format | int16 LE (PCM brut) |
-| Chunk | 1280 samples (80 ms) |
-| Latence | ~80 ms (capture) + <1 ms (TCP LAN) |
-| CPU | < 1 % |
-| RAM | < 20 MB |
-| Dépendances | `pyalsaaudio`, `libasound2-dev` |
-
----
-
-## Compatibilité
-
-- ✅ NVIDIA Jetson Nano / Orin (JetPack 5.x / 6.x)
-- ✅ Raspberry Pi (OS Bullseye ou plus récent)
-- ✅ Debian 11+
-- ✅ Ubuntu 20.04+
-- ✅ Tout Linux ARM64 ou x86_64 avec ALSA
-
----
-
-## Commandes utiles
-
-```bash
 # Restart
 sudo systemctl restart vision-satellite
 
-# Stop / Start
-sudo systemctl stop vision-satellite
-sudo systemctl start vision-satellite
+# Lister les capabilities détectées
+python3 -m vision_satellite.main --list-capabilities
 
-# Désactiver l'auto-démarrage (sans désinstaller)
+# Lancer le runtime en foreground (debug)
+python3 -m vision_satellite.main --runtime --verbose
+
+# Ré-enrollment (nouveau cert, ancien révoqué côté serveur)
+sudo ./install.sh --reenroll 'vision-enroll://...'
+
+# Désinstaller complètement
+sudo systemctl stop vision-satellite
 sudo systemctl disable vision-satellite
-
-# Modifier la config (IP serveur, port, device)
-sudo nano /opt/vision-satellite/config.env
-sudo systemctl restart vision-satellite
-
-# Test manuel sans systemd (utile pour debug)
-sudo systemctl stop vision-satellite
-/opt/vision-satellite/venv/bin/python3 /opt/vision-satellite/vision_satellite.py \
-    --host 192.168.1.100 --verbose
-
-# Lister les micros
-python3 /opt/vision-satellite/vision_satellite.py --list-devices
+sudo rm -rf /opt/vision-satellite /etc/systemd/system/vision-satellite.service
+sudo systemctl daemon-reload
 ```
 
 ---
 
-## Désinstallation
+## Mise à jour
 
 ```bash
-sudo systemctl stop vision-satellite
-sudo systemctl disable vision-satellite
-sudo rm -rf /opt/vision-satellite
-sudo rm /etc/systemd/system/vision-satellite.service
-sudo systemctl daemon-reload
+cd ~/vision-satellite && git pull \
+    && sudo cp -r vision_satellite wizard.py /opt/vision-satellite/ \
+    && sudo systemctl restart vision-satellite
 ```
+
+Si `install.sh` a changé (service systemd, règles udev, nouvelles deps) :
+
+```bash
+cd ~/vision-satellite && git pull && sudo ./install.sh --reenroll '<uri>'
+```
+
+---
+
+## Structure du projet
+
+```
+vision-satellite/
+├── install.sh                 # orchestrateur (wizard ou scripté)
+├── wizard.py                  # TUI whiptail (9 écrans guidés)
+└── vision_satellite/
+    ├── main.py                # CLI : --list-capabilities, --enroll, --runtime
+    ├── identity.py            # keypair ECDSA P-256 + storage sécurisé
+    ├── enrollment.py          # client POST /enroll + TLS cert pinning
+    ├── runtime.py             # client mTLS asyncio (HELLO + stream audio + reconnect)
+    ├── qr_parse.py            # parser URI vision-enroll://
+    ├── frames.py              # codec CBOR (13 types)
+    └── capabilities/
+        ├── audio.py           # arecord + /proc/asound
+        ├── camera.py          # v4l2-ctl
+        ├── bluetooth.py       # hciconfig
+        ├── zigbee.py          # USB serial (Sonoff, ConBee, CC2531, zig-a-zig-ah)
+        └── zwave.py           # USB serial (Aeotec, Silicon Labs, Zooz)
+```
+
+**49 tests automatisés** (pytest + mocks subprocess + vrai serveur mTLS local).
 
 ---
 
@@ -165,54 +198,43 @@ sudo systemctl daemon-reload
 journalctl -u vision-satellite -n 50
 ```
 
-### "No such device" / erreur ALSA
-Vérifie que le micro est détecté :
+### "CA non initialisée" au POST /enroll
+Le serveur Vision n'a pas encore bootstrappé sa CA. Redémarre l'API Vision → vérifie les logs `Vision satellite CA bootstrappée`.
+
+### Fingerprint mismatch
+Le QR contient un fingerprint ancien (cert serveur a changé, ou QR d'un autre serveur). Régénère un QR depuis l'admin Vision.
+
+### Token invalide / expiré / utilisé
+Le token a un TTL de 10 minutes et est **one-shot**. Régénère un nouveau depuis l'admin Vision.
+
+### Jetson Nano (original)
+Le Jetson Nano avec JetPack 4.x a des bugs connus côté USB audio (isochronous ASYNC endpoint). Pour un satellite audio fiable, **préfère un Raspberry Pi 4 ou Zero 2W** — le code tourne tel quel. Le Nano reste excellent pour la **vidéo** (NVENC hardware) et l'**inférence légère** (YOLO nano via TensorRT).
+
+### PulseAudio grab le micro USB
+`install.sh` neutralise PulseAudio. Si tu fais une installation manuelle sans passer par le script :
 ```bash
-arecord -l
-```
-Puis passe explicitement le device :
-```bash
-sudo ./install.sh --host <IP> --device hw:<N>,0
+echo 'autospawn = no' | sudo tee -a /etc/pulse/client.conf
+sudo systemctl --global mask pulseaudio.service pulseaudio.socket
+sudo pkill -9 -f pulseaudio
 ```
 
-### Connexion refusée / timeout TCP
-- Vérifie que Vision tourne côté serveur : `nc -zv <VISION_IP> 9999`
-- Vérifie firewall (`ufw status` côté serveur)
-- Ping réseau : `ping <VISION_IP>`
-
-### Jetson Nano — micro USB non reconnu
-```bash
-sudo usermod -a -G audio $USER
-sudo reboot
-```
+### USB autosuspend kick le mic après ~10s
+`install.sh` le désactive via `/sys/module/usbcore/parameters/autosuspend=-1` + udev rule persistante `/etc/udev/rules.d/90-vision-satellite-usb-audio.rules`.
 
 ---
 
-## Protocole TCP
+## Roadmap
 
-1. Connexion TCP au serveur Vision
-2. Header de 8 octets : `sample_rate` (uint32 LE) + `chunk_size` (uint32 LE)
-3. Stream continu de chunks PCM int16 LE (1280 samples = 2560 octets)
+**v1.1** :
+- Streaming vidéo (H.264 via NVENC pour Jetson)
+- Events Zigbee/Z-Wave relayés vers Vision (zigbee2mqtt / Z-Wave JS-compatible)
+- Post-quantique hybride (ML-KEM-768 + ML-DSA-65 en TLS 1.3)
+- WireGuard underlay obligatoire pour les satellites hors-LAN
 
-Compatible avec `core/perception/audio_tcp.py` du serveur Vision.
-
----
-
-## Sécurité
-
-⚠️ **En production, la connexion DOIT être chiffrée.** L'audio brut sur le réseau est interceptable.
-
-Options prévues :
-- **WireGuard tunnel** (recommandé) — les satellites rejoignent le VPN Vision, TCP reste simple
-- **TLS** — chiffrement applicatif (`ssl.wrap_socket`)
-
-Le chiffrement sera implémenté avant tout déploiement hors LAN de test.
-
----
-
-## ESP32 (à venir)
-
-Un satellite ESP32 avec micro I2S (INMP441) est en cours de conception — voir `esp32/README.md`.
+**v2.0** :
+- ESP32 satellite (I2S mic + ESP-TLS)
+- Hardware attestation via Secure Element (ATECC608A, OPTIGA Trust M)
+- Multi-site avec FIDO Device Onboard (FDO) rendezvous
 
 ---
 
