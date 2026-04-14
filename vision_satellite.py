@@ -102,12 +102,9 @@ def _card_index_from_device(device: str) -> Optional[int]:
 
 def _test_arecord_capture(device: str, rate: int, duration_s: int = DETECT_DURATION_S) -> bool:
     """
-    Lance `arecord` en test : capture `duration_s` secondes dans /dev/null
-    à `rate` Hz. Si le subprocess retourne 0 (succès complet), le device
-    supporte vraiment ce rate. Sinon (EIO, broken pipe...), on skip.
-
-    C'est le test authoritative — pyalsaaudio mentait en prétendant que
-    16kHz marchait sur le TONOR TM20, arecord dit la vérité.
+    Lance `arecord` en test : capture `duration_s` secondes à `rate` Hz,
+    vérifie que le subprocess sort 0 ET que les octets capturés ont du
+    signal (pas juste du silence, sinon ça retient une carte loopback).
     """
     cmd = [
         "arecord",
@@ -122,20 +119,36 @@ def _test_arecord_capture(device: str, rate: int, duration_s: int = DETECT_DURAT
     try:
         result = subprocess.run(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=duration_s + 5,
         )
-        if result.returncode == 0:
-            return True
-        log.debug("%s @ %dHz ko: %s", device, rate, result.stderr.decode("utf-8", "replace").strip())
-        return False
     except subprocess.TimeoutExpired:
-        log.debug("%s @ %dHz: timeout test", device, rate)
+        log.warning("  %s @ %dHz: timeout test (arecord bloqué)", device, rate)
         return False
     except Exception as exc:
-        log.debug("%s @ %dHz: exception: %s", device, rate, exc)
+        log.warning("  %s @ %dHz: exception: %s", device, rate, exc)
         return False
+
+    if result.returncode != 0:
+        err = result.stderr.decode("utf-8", "replace").strip().replace("\n", " | ")
+        log.warning("  %s @ %dHz ko (code=%d): %s",
+                    device, rate, result.returncode, err or "(pas de stderr)")
+        return False
+
+    # Signal check: un device loopback/HDMI retourne souvent que des zéros.
+    # Si on ne voit aucun octet non-nul sur toute la capture, on rejette.
+    data = result.stdout
+    expected = rate * BYTES_PER_SAMPLE * duration_s
+    if len(data) < expected * 0.5:
+        log.warning("  %s @ %dHz ko: trop peu d'octets (%d/%d)",
+                    device, rate, len(data), expected)
+        return False
+    if not any(b != 0 for b in data[::1024]):
+        log.warning("  %s @ %dHz ko: silence pur (probable loopback/HDMI sans mic)",
+                    device, rate)
+        return False
+    return True
 
 
 def _disable_usb_autosuspend(card_idx: int) -> None:
@@ -181,23 +194,27 @@ def find_capture_device() -> Optional[Tuple[str, int]]:
     for idx, desc, is_usb in cards:
         log.info("  [%d] %s%s", idx, desc, " (USB)" if is_usb else "")
 
-    candidates = sorted(cards, key=lambda c: (0 if c[2] else 1, c[0]))
+    usb_cards = [c for c in cards if c[2]]
+    if not usb_cards:
+        log.error("Aucune carte USB détectée. Un satellite doit avoir un micro USB.")
+        log.error("Branche un micro USB, ou passe --device manuellement si tu es sûr.")
+        return None
 
-    for idx, desc, is_usb in candidates:
-        kind = "USB" if is_usb else "onboard"
-        if is_usb:
-            _disable_usb_autosuspend(idx)
+    for idx, desc, _ in usb_cards:
+        _disable_usb_autosuspend(idx)
         device = "hw:{},0".format(idx)
-        log.info("Test %s (%s) — %ds par rate...", desc, kind, DETECT_DURATION_S)
+        log.info("Test %s (USB) — %ds par rate...", desc, DETECT_DURATION_S)
         for rate in PREFERRED_RATES:
             if _test_arecord_capture(device, rate):
-                log.info("Micro sélectionné: %s (%s) → %s @ %dHz",
-                         desc, kind, device, rate)
+                log.info("Micro sélectionné: %s → %s @ %dHz", desc, device, rate)
                 return (device, rate)
         log.warning("  card %d (%s) → aucun rate préféré utilisable", idx, desc)
 
-    log.error("Aucune carte son capable de capturer en mono int16.")
-    log.error("Rates testés: %s", PREFERRED_RATES)
+    log.error("Aucun micro USB ne capture correctement. Pistes :")
+    log.error("  - essayer un autre câble USB")
+    log.error("  - brancher sur un autre port USB (ou hub alimenté)")
+    log.error("  - vérifier que le micro marche sur un autre appareil")
+    log.error("Pour forcer une carte onboard : --device hw:N,0")
     return None
 
 
