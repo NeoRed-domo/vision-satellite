@@ -3,9 +3,9 @@
 # Compatible: Debian, Ubuntu, JetPack (Jetson), Raspberry Pi OS
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/NeoRed/vision-audio-satellite/main/install.sh | bash -s -- --host 192.168.1.100
+#   curl -sSL https://raw.githubusercontent.com/NeoRed-domo/vision-audio-satellite/main/install.sh | bash -s -- --host 192.168.1.100
 #   # ou
-#   git clone https://github.com/NeoRed/vision-audio-satellite.git && cd vision-audio-satellite && ./install.sh --host 192.168.1.100
+#   git clone https://github.com/NeoRed-domo/vision-audio-satellite.git && cd vision-audio-satellite && ./install.sh --host 192.168.1.100
 
 set -euo pipefail
 
@@ -85,7 +85,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/vision_satellite.py" ]; then
     sudo cp "$SCRIPT_DIR/vision_satellite.py" "$INSTALL_DIR/"
 else
-    sudo curl -sSL "https://raw.githubusercontent.com/NeoRed/vision-audio-satellite/main/vision_satellite.py" \
+    sudo curl -sSL "https://raw.githubusercontent.com/NeoRed-domo/vision-audio-satellite/main/vision_satellite.py" \
         -o "$INSTALL_DIR/vision_satellite.py"
 fi
 sudo chmod +x "$INSTALL_DIR/vision_satellite.py"
@@ -113,7 +113,7 @@ echo -e "${CYAN}▶ Création du service systemd...${NC}"
 sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << SERVICEEOF
 [Unit]
 Description=Vision Audio Satellite
-Documentation=https://github.com/NeoRed/vision-audio-satellite
+Documentation=https://github.com/NeoRed-domo/vision-audio-satellite
 After=network-online.target sound.target
 Wants=network-online.target
 
