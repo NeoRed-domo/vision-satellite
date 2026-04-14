@@ -16,8 +16,6 @@ Usage:
   python3 vision_satellite.py --host 192.168.1.100 --device hw:1,0
   python3 vision_satellite.py --host 192.168.1.100 --list-devices
 """
-from __future__ import annotations
-
 import argparse
 import logging
 import os
@@ -25,6 +23,7 @@ import socket
 import struct
 import sys
 import time
+from typing import List, Optional
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +43,7 @@ RECONNECT_DELAY_S = 2
 MAX_RECONNECT_DELAY_S = 30
 
 
-def find_usb_mic(preferred_names: list[str] | None = None) -> str | None:
+def find_usb_mic(preferred_names: Optional[List[str]] = None) -> Optional[str]:
     """
     Auto-detect USB microphone ALSA device.
 
