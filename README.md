@@ -1,8 +1,10 @@
-# Vision Audio Satellite
+# Vision Satellite
 
-Streame l'audio d'un micro USB vers le serveur [Vision](https://github.com/NeoRed-domo/vision) via TCP.
+Satellite déporté pour le serveur [Vision](https://github.com/NeoRed-domo/vision) : streame des flux (aujourd'hui audio, demain vidéo) vers le serveur via TCP.
 
-Conçu pour **Jetson Nano / Orin**, **Raspberry Pi**, ou tout Linux (ARM64 ou x86_64) avec un micro USB.
+Conçu pour **Jetson Nano / Orin**, **Raspberry Pi**, ou tout Linux (ARM64 ou x86_64) avec micro USB.
+
+> **État actuel** : streaming audio uniquement. Le support vidéo (caméra USB / CSI) est prévu et réutilisera la même installation.
 
 ---
 
@@ -11,8 +13,8 @@ Conçu pour **Jetson Nano / Orin**, **Raspberry Pi**, ou tout Linux (ARM64 ou x8
 Sur le satellite (Jetson Nano, Pi, etc.), remplace `192.168.1.100` par l'IP du serveur Vision :
 
 ```bash
-git clone https://github.com/NeoRed-domo/vision-audio-satellite.git
-cd vision-audio-satellite && sudo ./install.sh --host 192.168.1.100
+git clone https://github.com/NeoRed-domo/vision-satellite.git
+cd vision-satellite && sudo ./install.sh --host 192.168.1.100
 ```
 
 C'est tout. Le satellite démarre et se connecte automatiquement.
@@ -20,7 +22,7 @@ C'est tout. Le satellite démarre et se connecte automatiquement.
 ### Variante une ligne (sans clone)
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/NeoRed-domo/vision-audio-satellite/main/install.sh | sudo bash -s -- --host 192.168.1.100
+curl -sSL https://raw.githubusercontent.com/NeoRed-domo/vision-satellite/main/install.sh | sudo bash -s -- --host 192.168.1.100
 ```
 
 ---
