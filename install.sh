@@ -108,6 +108,21 @@ VISION_PORT=$VISION_PORT
 DEVICE_ARG=$DEVICE_ARG
 ENVEOF
 
+# 5bis. Disable USB autosuspend (fix USB mic drops after ~10s on Jetson/Pi)
+echo -e "${CYAN}▶ Désactivation USB autosuspend (évite les déconnexions micro)...${NC}"
+# Runtime: take effect immediately
+if [ -f /sys/module/usbcore/parameters/autosuspend ]; then
+    echo -1 | sudo tee /sys/module/usbcore/parameters/autosuspend > /dev/null || true
+fi
+# Persistent: udev rule (couvre tous les periphériques audio USB, présents ou futurs)
+sudo tee /etc/udev/rules.d/90-vision-satellite-usb-audio.rules > /dev/null << 'UDEVEOF'
+# Vision Satellite — garde les périphériques audio USB en permanence actifs
+SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="01", TEST=="power/control", ATTR{power/control}="on"
+SUBSYSTEM=="usb", DRIVERS=="usb", ATTRS{bDeviceClass}=="00", TEST=="power/control", ATTR{power/control}="on"
+UDEVEOF
+sudo udevadm control --reload-rules 2>/dev/null || true
+sudo udevadm trigger 2>/dev/null || true
+
 # 6. Create systemd service
 echo -e "${CYAN}▶ Création du service systemd...${NC}"
 sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << SERVICEEOF

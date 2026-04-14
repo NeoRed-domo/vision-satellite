@@ -226,53 +226,75 @@ def connect(host: str, port: int) -> socket.socket:
     return sock
 
 
+def _close_pcm(pcm):
+    if pcm is None:
+        return
+    try:
+        pcm.close()
+    except Exception:
+        pass
+
+
 def stream(host: str, port: int, device: str):
     """
-    Main streaming loop with auto-reconnect.
-    Captures audio from ALSA and sends to Vision server.
+    Main streaming loop. ALSA and network errors are handled
+    separately so a USB glitch doesn't reconnect the socket (and
+    vice versa).
     """
     pcm = open_capture(device)
-    reconnect_delay = RECONNECT_DELAY_S
     sock = None
+    reconnect_delay = RECONNECT_DELAY_S
 
     while True:
-        # Connect (with retry)
+        # (Re)connect socket
         if sock is None:
             try:
                 sock = connect(host, port)
-                reconnect_delay = RECONNECT_DELAY_S  # Reset backoff
+                reconnect_delay = RECONNECT_DELAY_S
                 log.info("Streaming audio...")
-            except (ConnectionRefusedError, OSError) as e:
-                log.warning("Connexion échouée (%s), retry dans %ds...", e, reconnect_delay)
+            except (ConnectionRefusedError, OSError) as exc:
+                log.warning("Connexion échouée (%s), retry dans %ds...", exc, reconnect_delay)
                 time.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 2, MAX_RECONNECT_DELAY_S)
                 continue
 
-        # Capture + send
+        # Capture
         try:
             length, data = pcm.read()
-            if length > 0 and data:
-                sock.sendall(data)
-            elif length < 0:
-                log.warning("ALSA overrun (length=%d), chunk perdu", length)
-        except BrokenPipeError:
-            log.warning("Connexion perdue (broken pipe), reconnexion...")
+        except Exception as exc:
+            # ALSA fault (EIO on USB auto-suspend, unplug, overrun unhandled, etc.)
+            log.warning("ALSA erreur (%s) — réouverture de la capture", exc)
+            _close_pcm(pcm)
+            time.sleep(0.2)
+            try:
+                pcm = open_capture(device)
+            except Exception as reopen_exc:
+                log.error("Réouverture impossible: %s — retry dans 2s", reopen_exc)
+                time.sleep(2)
+            continue
+
+        if length <= 0 or not data:
+            if length < 0:
+                log.debug("ALSA overrun (length=%d)", length)
+            continue
+
+        # Send
+        try:
+            sock.sendall(data)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+            log.warning("Socket perdue (%s), reconnexion...", exc.__class__.__name__)
+            try:
+                sock.close()
+            except Exception:
+                pass
             sock = None
-        except ConnectionResetError:
-            log.warning("Connexion reset, reconnexion...")
+        except OSError as exc:
+            log.warning("Erreur réseau: %s, reconnexion...", exc)
+            try:
+                sock.close()
+            except Exception:
+                pass
             sock = None
-        except OSError as e:
-            log.warning("Erreur réseau: %s, reconnexion...", e)
-            sock = None
-        except Exception as e:
-            log.error("Erreur inattendue: %s", e)
-            if sock:
-                try:
-                    sock.close()
-                except Exception:
-                    pass
-                sock = None
-            time.sleep(1)
 
 
 def main():
