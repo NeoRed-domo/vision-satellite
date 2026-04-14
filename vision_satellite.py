@@ -82,8 +82,12 @@ def enumerate_cards() -> List[Tuple[int, str, bool]]:
     return cards
 
 
-def _can_capture(device: str) -> bool:
-    """Open the device at our target format and try to read one chunk."""
+def _can_capture(device: str, attempts: int = 5) -> bool:
+    """
+    Open the device and try several reads. A real mic will deliver at
+    least one valid chunk; a bogus device (e.g. Tegra ADMAIF loopback)
+    will systematically fail with EPIPE / return empty data.
+    """
     import alsaaudio
     pcm = None
     try:
@@ -96,8 +100,14 @@ def _can_capture(device: str) -> bool:
         pcm.setchannels(CHANNELS)
         pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
         pcm.setperiodsize(CHUNK_SIZE)
-        length, data = pcm.read()
-        return length > 0 and bool(data)
+        for _ in range(attempts):
+            try:
+                length, data = pcm.read()
+                if length > 0 and data:
+                    return True
+            except Exception:
+                pass
+        return False
     except Exception as exc:
         log.debug("%s non utilisable: %s", device, exc)
         return False
@@ -130,13 +140,17 @@ def find_capture_device() -> Optional[str]:
 
     candidates = sorted(cards, key=lambda c: (0 if c[2] else 1, c[0]))
 
+    # plughw: lets ALSA resample/convert so we can ask 16kHz mono int16 even
+    # when the device only supports e.g. 48kHz natively (common for USB mics).
+    # We try plughw first, then fall back to hw as a last resort.
     for idx, desc, is_usb in candidates:
-        device = "hw:{},0".format(idx)
         kind = "USB" if is_usb else "onboard"
-        if _can_capture(device):
-            log.info("Micro sélectionné: %s (%s) → %s", desc, kind, device)
-            return device
-        log.warning("  %s (%s) → non utilisable en capture", device, desc)
+        for prefix in ("plughw", "hw"):
+            device = "{}:{},0".format(prefix, idx)
+            if _can_capture(device):
+                log.info("Micro sélectionné: %s (%s) → %s", desc, kind, device)
+                return device
+        log.warning("  card %d (%s) → aucune capture utilisable (hw/plughw)", idx, desc)
 
     log.error("Aucune carte son capable de capturer en 16kHz mono int16 trouvée.")
     log.error("Branche un micro USB ou passe --device manuellement.")
