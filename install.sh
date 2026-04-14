@@ -1,47 +1,61 @@
 #!/bin/bash
-# Vision Satellite — Installation one-shot
+# Vision Satellite — Installation
 # Compatible: Debian, Ubuntu, JetPack (Jetson), Raspberry Pi OS
 #
-# Usage:
-#   curl -sSL https://raw.githubusercontent.com/NeoRed-domo/vision-satellite/main/install.sh | bash -s -- --host 192.168.1.100
-#   # ou
-#   git clone https://github.com/NeoRed-domo/vision-satellite.git && cd vision-satellite && ./install.sh --host 192.168.1.100
+# Modes:
+#   1. Interactif (défaut)      : sudo ./install.sh
+#                                 → lance le wizard TUI (whiptail)
+#   2. Non-interactif enrollment: sudo ./install.sh --enroll '<uri>'
+#                                 → skip wizard, enroll direct avec l'URI QR
+#   3. Re-enrollment            : sudo ./install.sh --reenroll '<uri>'
+#                                 → régénère keypair + nouveau cert
+#
+# URI : vision-enroll://HOST:PORT?token=XXX&fp=YYY&name=ZZZ&v=1
 
 set -euo pipefail
 
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 INSTALL_DIR="/opt/vision-satellite"
 SERVICE_NAME="vision-satellite"
-VISION_HOST=""
-VISION_PORT="9999"
-DEVICE=""
+ENROLL_URI=""
+REENROLL=false
+ASSUME_YES=false
 
 usage() {
-    echo "Usage: $0 --host <VISION_SERVER_IP> [--port 9999] [--device hw:1,0]"
-    echo ""
-    echo "  --host    IP du serveur Vision (requis)"
-    echo "  --port    Port TCP (défaut: 9999)"
-    echo "  --device  Device ALSA (auto-détecté si omis)"
-    exit 1
+    cat <<EOF
+Usage :
+  sudo $0                               # wizard interactif
+  sudo $0 --enroll '<vision-enroll URI>'  # non-interactif
+  sudo $0 --reenroll '<uri>'            # regen keypair + nouveau cert
+  sudo $0 --yes --enroll '<uri>'        # full scripté (zéro prompt)
+
+Options :
+  --enroll URI     URI d'enrollment (QR code) du serveur Vision
+  --reenroll URI   Idem mais remplace une installation existante
+  --yes            Skip le wizard en toutes circonstances
+  -h, --help       Affiche cette aide
+EOF
+    exit "${1:-0}"
 }
 
-# Parse args
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --host) VISION_HOST="$2"; shift 2 ;;
-        --port) VISION_PORT="$2"; shift 2 ;;
-        --device) DEVICE="$2"; shift 2 ;;
-        *) usage ;;
+        --enroll) ENROLL_URI="$2"; shift 2 ;;
+        --reenroll) ENROLL_URI="$2"; REENROLL=true; shift 2 ;;
+        --yes|-y) ASSUME_YES=true; shift ;;
+        -h|--help) usage 0 ;;
+        *) echo -e "${RED}Option inconnue: $1${NC}" >&2; usage 1 ;;
     esac
 done
 
-if [ -z "$VISION_HOST" ]; then
-    echo -e "${RED}Erreur: --host requis${NC}"
-    usage
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}Ce script doit être lancé avec sudo.${NC}" >&2
+    exit 1
 fi
 
 echo -e "${CYAN}"
@@ -57,109 +71,125 @@ echo -e "${CYAN}▶ Détection de l'OS...${NC}"
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     echo "  OS: $PRETTY_NAME"
-else
-    echo "  OS: inconnu (on continue quand même)"
 fi
-
-# Detect if Jetson
 if [ -f /etc/nv_tegra_release ]; then
     echo "  Platform: NVIDIA Jetson"
 elif [ -f /sys/firmware/devicetree/base/model ]; then
-    MODEL=$(cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0')
+    MODEL=$(tr -d '\0' < /sys/firmware/devicetree/base/model 2>/dev/null || true)
     echo "  Platform: $MODEL"
 else
     echo "  Platform: Generic Linux $(uname -m)"
 fi
 
-# 2. Install system dependencies
+# 2. Install system deps
 echo -e "${CYAN}▶ Installation des dépendances système...${NC}"
-sudo apt-get update -qq
-sudo apt-get install -y -qq python3 alsa-utils
+apt-get update -qq
+PACKAGES="python3 python3-pip python3-venv alsa-utils v4l-utils bluez-tools usbutils nmap"
+if [ -z "$ENROLL_URI" ] || [ "$ASSUME_YES" = false ]; then
+    PACKAGES="$PACKAGES whiptail"
+fi
+apt-get install -y -qq $PACKAGES
 
-# 3. Create install directory
+# cryptography (Python lib) pour keygen + fingerprint pinning
+pip3 install --quiet --break-system-packages cryptography 2>/dev/null \
+    || pip3 install --quiet cryptography
+
+# 3. Install files
 echo -e "${CYAN}▶ Installation dans $INSTALL_DIR...${NC}"
-sudo mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR"
+chmod 700 "$INSTALL_DIR"
 
-# Copy script (from local dir if available, otherwise download)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/vision_satellite.py" ]; then
-    sudo cp "$SCRIPT_DIR/vision_satellite.py" "$INSTALL_DIR/"
-else
-    sudo curl -sSL "https://raw.githubusercontent.com/NeoRed-domo/vision-satellite/main/vision_satellite.py" \
-        -o "$INSTALL_DIR/vision_satellite.py"
-fi
-sudo chmod +x "$INSTALL_DIR/vision_satellite.py"
+# Copie le package + wizard.py
+cp -r "$SCRIPT_DIR/vision_satellite" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/wizard.py" "$INSTALL_DIR/wizard.py"
 
-# 4. (plus de venv nécessaire — on utilise arecord subprocess, pas pyalsaaudio)
-
-# 5. Create config file
-echo -e "${CYAN}▶ Configuration...${NC}"
-DEVICE_ARG=""
-if [ -n "$DEVICE" ]; then
-    DEVICE_ARG="--device $DEVICE"
-fi
-
-sudo tee "$INSTALL_DIR/config.env" > /dev/null << ENVEOF
-VISION_HOST=$VISION_HOST
-VISION_PORT=$VISION_PORT
-DEVICE_ARG=$DEVICE_ARG
-ENVEOF
-
-# 5a. Neutraliser PulseAudio (concurrence le mic USB sur certains setups,
-#     p.ex. TONOR TM20 → EIO quand gdm lance pulse en parallèle).
-#     Un satellite audio n'en a pas besoin.
-echo -e "${CYAN}▶ Neutralisation PulseAudio...${NC}"
+# 4. Neutraliser PulseAudio (cf. issues connues Jetson Nano)
+echo -e "${CYAN}▶ Neutralisation PulseAudio (évite conflit sur card USB)...${NC}"
 if [ -f /etc/pulse/client.conf ]; then
     if ! grep -q "^autospawn\s*=\s*no" /etc/pulse/client.conf; then
-        # Remplace une ligne autospawn existante, sinon append
         if grep -qE "^\s*;?\s*autospawn\s*=" /etc/pulse/client.conf; then
-            sudo sed -i 's/^\s*;*\s*autospawn\s*=.*/autospawn = no/' /etc/pulse/client.conf
+            sed -i 's/^\s*;*\s*autospawn\s*=.*/autospawn = no/' /etc/pulse/client.conf
         else
-            echo "autospawn = no" | sudo tee -a /etc/pulse/client.conf > /dev/null
+            echo "autospawn = no" >> /etc/pulse/client.conf
         fi
     fi
 fi
-sudo systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
-# GDM sur headless = consommateur pulse inutile
+systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
 for gdm in gdm gdm3; do
     if systemctl list-unit-files 2>/dev/null | grep -q "^${gdm}.service"; then
-        sudo systemctl stop "$gdm" 2>/dev/null || true
-        sudo systemctl disable "$gdm" 2>/dev/null || true
+        systemctl stop "$gdm" 2>/dev/null || true
+        systemctl disable "$gdm" 2>/dev/null || true
     fi
 done
-sudo pkill -9 -f pulseaudio 2>/dev/null || true
+pkill -9 -f pulseaudio 2>/dev/null || true
 
-# 5b. Disable USB autosuspend (fix USB mic drops after ~10s on Jetson/Pi)
-echo -e "${CYAN}▶ Désactivation USB autosuspend (évite les déconnexions micro)...${NC}"
-# Runtime: take effect immediately
+# 5. USB autosuspend off (Jetson/Pi USB mic stability)
+echo -e "${CYAN}▶ Désactivation USB autosuspend...${NC}"
 if [ -f /sys/module/usbcore/parameters/autosuspend ]; then
-    echo -1 | sudo tee /sys/module/usbcore/parameters/autosuspend > /dev/null || true
+    echo -1 > /sys/module/usbcore/parameters/autosuspend || true
 fi
-# Persistent: udev rule (couvre tous les periphériques audio USB, présents ou futurs)
-sudo tee /etc/udev/rules.d/90-vision-satellite-usb-audio.rules > /dev/null << 'UDEVEOF'
-# Vision Satellite — garde les périphériques audio USB en permanence actifs
+cat > /etc/udev/rules.d/90-vision-satellite-usb-audio.rules <<'UDEVEOF'
 SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="01", TEST=="power/control", ATTR{power/control}="on"
 SUBSYSTEM=="usb", DRIVERS=="usb", ATTRS{bDeviceClass}=="00", TEST=="power/control", ATTR{power/control}="on"
 UDEVEOF
-sudo udevadm control --reload-rules 2>/dev/null || true
-sudo udevadm trigger 2>/dev/null || true
+udevadm control --reload-rules 2>/dev/null || true
+udevadm trigger 2>/dev/null || true
 
-# 6. Create systemd service
+# 6. Decide flow: wizard OR scripted
+if [ -n "$ENROLL_URI" ]; then
+    MODE="scripted"
+elif [ "$ASSUME_YES" = true ]; then
+    echo -e "${RED}--yes sans --enroll : impossible, l'URI est requise.${NC}"
+    exit 1
+elif [ ! -t 0 ]; then
+    echo -e "${RED}Pas de TTY et pas d'URI fournie : lancer avec --enroll '<uri>'${NC}"
+    exit 1
+else
+    MODE="wizard"
+fi
+
+# 7. Re-enrollment cleanup
+if [ "$REENROLL" = true ]; then
+    echo -e "${YELLOW}▶ Re-enrollment : suppression de l'ancienne identité...${NC}"
+    rm -f "$INSTALL_DIR/device.key" "$INSTALL_DIR/device.crt" "$INSTALL_DIR/vision-ca.crt"
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+fi
+
+# 8. Enrollment
+if [ "$MODE" = "wizard" ]; then
+    echo -e "${CYAN}▶ Lancement du wizard TUI...${NC}"
+    cd "$INSTALL_DIR"
+    # Le wizard invoque lui-même python3 -m vision_satellite.main --enroll
+    python3 wizard.py
+    WIZARD_RC=$?
+    if [ $WIZARD_RC -ne 0 ]; then
+        echo -e "${RED}Wizard annulé ou échoué (code=$WIZARD_RC).${NC}"
+        exit $WIZARD_RC
+    fi
+else
+    echo -e "${CYAN}▶ Enrollment non-interactif...${NC}"
+    cd "$INSTALL_DIR"
+    python3 -m vision_satellite.main --enroll "$ENROLL_URI" \
+        --key-path "$INSTALL_DIR/device.key" \
+        --cert-path "$INSTALL_DIR/device.crt" \
+        --ca-path "$INSTALL_DIR/vision-ca.crt"
+fi
+
+# 9. Create/update systemd service (invoque runtime — Phase C côté serveur finalisera le mTLS)
 echo -e "${CYAN}▶ Création du service systemd...${NC}"
-sudo tee "/etc/systemd/system/${SERVICE_NAME}.service" > /dev/null << SERVICEEOF
+cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<SERVICEEOF
 [Unit]
-Description=Vision Satellite (audio streamer)
+Description=Vision Satellite (multi-capability streamer)
 Documentation=https://github.com/NeoRed-domo/vision-satellite
 After=network-online.target sound.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=$INSTALL_DIR/config.env
-# HOME writable pour que le plugin ALSA→Pulse (chargé implicitement par
-# libasound2-plugins) puisse créer son dossier sans warning.
+WorkingDirectory=$INSTALL_DIR
 Environment="HOME=$INSTALL_DIR"
-ExecStart=/usr/bin/python3 $INSTALL_DIR/vision_satellite.py --host \${VISION_HOST} --port \${VISION_PORT} \$DEVICE_ARG
+ExecStart=/usr/bin/python3 -m vision_satellite.main --runtime
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -171,33 +201,27 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=$INSTALL_DIR
-# Audio access
-SupplementaryGroups=audio
+SupplementaryGroups=audio video dialout plugdev bluetooth
 
 [Install]
 WantedBy=multi-user.target
 SERVICEEOF
 
-# 7. Enable and start
-sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl start "$SERVICE_NAME"
+systemctl daemon-reload
+systemctl enable "$SERVICE_NAME"
+# Ne démarre PAS le service tant que runtime mTLS n'est pas livré (Phase C serveur)
+# systemctl start "$SERVICE_NAME"
 
-# 8. Verify
+# 10. Verify
 echo ""
-sleep 2
-if systemctl is-active --quiet "$SERVICE_NAME"; then
-    echo -e "${GREEN}✓ Vision Audio Satellite installé et démarré${NC}"
+if [ -f "$INSTALL_DIR/device.crt" ]; then
+    echo -e "${GREEN}✓ Vision Satellite enrollé${NC}"
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo "  Certs     : $INSTALL_DIR/device.crt, $INSTALL_DIR/vision-ca.crt"
+    echo "  Service   : $SERVICE_NAME (enabled, sera démarré quand le runtime mTLS sera livré)"
+    echo "  Prochaine étape : dans Vision Admin > Maison, placer ce satellite sur la carte."
+    echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 else
-    echo -e "${RED}✗ Le service n'a pas démarré. Check: journalctl -u $SERVICE_NAME -n 20${NC}"
+    echo -e "${RED}✗ Enrollment a échoué — cert non trouvé.${NC}"
+    exit 1
 fi
-
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "  Serveur Vision: $VISION_HOST:$VISION_PORT"
-echo "  Logs:           journalctl -u $SERVICE_NAME -f"
-echo "  Status:         systemctl status $SERVICE_NAME"
-echo "  Restart:        sudo systemctl restart $SERVICE_NAME"
-echo "  Config:         $INSTALL_DIR/config.env"
-echo "  Désinstaller:   sudo systemctl stop $SERVICE_NAME && sudo rm -rf $INSTALL_DIR /etc/systemd/system/${SERVICE_NAME}.service"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
