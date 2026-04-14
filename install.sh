@@ -135,6 +135,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$INSTALL_DIR/config.env
+# HOME writable pour que le plugin ALSA→Pulse (chargé implicitement par
+# libasound2-plugins) puisse créer son dossier sans warning.
+Environment="HOME=$INSTALL_DIR"
 ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/vision_satellite.py --host \${VISION_HOST} --port \${VISION_PORT} \$DEVICE_ARG
 Restart=always
 RestartSec=5
