@@ -33,15 +33,23 @@ logging.basicConfig(
 )
 log = logging.getLogger("vision.satellite")
 
-# Audio parameters (must match Vision's audio_tcp.py expectations)
-SAMPLE_RATE = 16000
+# Audio parameters (the server resamples to its pipeline rate if needed)
 CHANNELS = 1
-CHUNK_SIZE = 1280  # 80ms at 16kHz
+CHUNK_MS = 80  # chunk duration — determines latency
 FORMAT_BITS = 16
+
+# Preferred native rates, in order. We pick the first one the mic
+# supports natively. 16 kHz is the pipeline rate → zero resample on
+# the server. 48 kHz is the most common native rate for USB mics.
+PREFERRED_RATES = [16000, 32000, 44100, 48000]
 
 # Reconnect settings
 RECONNECT_DELAY_S = 2
 MAX_RECONNECT_DELAY_S = 30
+
+
+def chunk_size(rate: int) -> int:
+    return rate * CHUNK_MS // 1000
 
 
 def enumerate_cards() -> List[Tuple[int, str, bool]]:
@@ -124,11 +132,11 @@ def _card_index_from_device(device: str) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
-def _can_capture(device: str, attempts: int = 5) -> bool:
+def _try_capture(device: str, rate: int, attempts: int = 5) -> bool:
     """
-    Open the device and try several reads. A real mic will deliver at
-    least one valid chunk; a bogus device (e.g. Tegra ADMAIF loopback)
-    will systematically fail with EPIPE / return empty data.
+    Try to open device at exactly `rate` (native, no resample) and read
+    a chunk. Returns True only if setrate() confirms the rate and we
+    get at least one valid chunk.
     """
     import alsaaudio
     pcm = None
@@ -138,10 +146,13 @@ def _can_capture(device: str, attempts: int = 5) -> bool:
             mode=alsaaudio.PCM_NORMAL,
             device=device,
         )
-        pcm.setrate(SAMPLE_RATE)
+        actual_rate = pcm.setrate(rate)
+        if actual_rate != rate:
+            log.debug("%s refuse %dHz (renvoie %dHz)", device, rate, actual_rate)
+            return False
         pcm.setchannels(CHANNELS)
         pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-        pcm.setperiodsize(CHUNK_SIZE)
+        pcm.setperiodsize(chunk_size(rate))
         for _ in range(attempts):
             try:
                 length, data = pcm.read()
@@ -151,7 +162,7 @@ def _can_capture(device: str, attempts: int = 5) -> bool:
                 pass
         return False
     except Exception as exc:
-        log.debug("%s non utilisable: %s", device, exc)
+        log.debug("%s @ %dHz non utilisable: %s", device, rate, exc)
         return False
     finally:
         if pcm is not None:
@@ -161,15 +172,16 @@ def _can_capture(device: str, attempts: int = 5) -> bool:
                 pass
 
 
-def find_capture_device() -> Optional[str]:
+def find_capture_device() -> Optional[Tuple[str, int]]:
     """
-    Auto-detect the best working capture device.
+    Auto-detect the best working capture device and its native rate.
 
     Strategy:
-      1. Enumerate ALSA cards with USB tagging from /proc/asound/cards
-      2. Try USB cards first (priority 0), then onboard (priority 1)
-      3. For each, actually open + read a chunk to verify it works
-      4. Return the first device that passes the read test
+      1. Enumerate ALSA cards (USB-tagged from /proc/asound/cards)
+      2. Prefer USB cards, then onboard
+      3. For each card, try our preferred rates in order and pick the
+         first one that actually captures (no resample, native hw:)
+      4. Returns (device, rate) or None
     """
     cards = enumerate_cards()
     if not cards:
@@ -182,29 +194,24 @@ def find_capture_device() -> Optional[str]:
 
     candidates = sorted(cards, key=lambda c: (0 if c[2] else 1, c[0]))
 
-    # plughw: lets ALSA resample/convert so we can ask 16kHz mono int16 even
-    # when the device only supports e.g. 48kHz natively (common for USB mics).
-    # We try plughw first, then fall back to hw as a last resort.
     for idx, desc, is_usb in candidates:
         kind = "USB" if is_usb else "onboard"
         if is_usb:
-            # Fixer l'autosuspend AVANT le test — sinon le premier read peut
-            # tomber en EIO sur un device que le kernel a déjà suspendu.
+            # Désactive l'autosuspend AVANT le test — sinon le premier
+            # read peut tomber en EIO sur un device déjà suspendu.
             _disable_usb_autosuspend(idx)
-        for prefix in ("plughw", "hw"):
-            device = "{}:{},0".format(prefix, idx)
-            if _can_capture(device):
-                log.info("Micro sélectionné: %s (%s) → %s", desc, kind, device)
-                return device
-        log.warning("  card %d (%s) → aucune capture utilisable (hw/plughw)", idx, desc)
+        device = "hw:{},0".format(idx)
+        for rate in PREFERRED_RATES:
+            if _try_capture(device, rate):
+                log.info("Micro sélectionné: %s (%s) → %s @ %dHz",
+                         desc, kind, device, rate)
+                return (device, rate)
+        log.warning("  card %d (%s) → aucun rate préféré utilisable en capture", idx, desc)
 
-    log.error("Aucune carte son capable de capturer en 16kHz mono int16 trouvée.")
+    log.error("Aucune carte son capable de capturer en mono int16 trouvée.")
+    log.error("Rates testés: %s", PREFERRED_RATES)
     log.error("Branche un micro USB ou passe --device manuellement.")
     return None
-
-
-# Backward-compatible alias
-find_usb_mic = find_capture_device
 
 
 def list_devices():
@@ -220,18 +227,18 @@ def list_devices():
         print("Aucune carte son détectée.")
         return
 
-    print("Cartes ALSA:")
+    print("Cartes ALSA (rate natif retenu = premier qui marche) :")
     for idx, desc, is_usb in cards:
         tag = " (USB)" if is_usb else ""
         device = "hw:{},0".format(idx)
-        works = _can_capture(device)
-        status = "OK" if works else "KO"
+        working_rate = next((r for r in PREFERRED_RATES if _try_capture(device, r)), None)
+        status = "OK @ {}Hz".format(working_rate) if working_rate else "KO"
         print("  [{}] {}{}  → {}  [{}]".format(idx, desc, tag, device, status))
 
 
-def open_capture(device: str):
+def open_capture(device: str, rate: int):
     """
-    Open ALSA capture device at 16kHz mono int16.
+    Open ALSA capture device at the given native rate, mono int16.
     Returns alsaaudio.PCM instance.
     """
     import alsaaudio
@@ -241,17 +248,22 @@ def open_capture(device: str):
         mode=alsaaudio.PCM_NORMAL,
         device=device,
     )
-    pcm.setrate(SAMPLE_RATE)
+    actual_rate = pcm.setrate(rate)
+    if actual_rate != rate:
+        log.warning("setrate(%d) a renvoyé %d — on utilise %d",
+                    rate, actual_rate, actual_rate)
+        rate = actual_rate
     pcm.setchannels(CHANNELS)
     pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
-    pcm.setperiodsize(CHUNK_SIZE)
+    chunk = chunk_size(rate)
+    pcm.setperiodsize(chunk)
 
     log.info("Capture ouverte: %s (%dHz, %dch, int16, chunk=%d)",
-             device, SAMPLE_RATE, CHANNELS, CHUNK_SIZE)
+             device, rate, CHANNELS, chunk)
     return pcm
 
 
-def connect(host: str, port: int) -> socket.socket:
+def connect(host: str, port: int, rate: int, chunk: int) -> socket.socket:
     """
     Connect to Vision server and send the audio header.
     Returns connected socket with TCP_NODELAY enabled.
@@ -262,13 +274,12 @@ def connect(host: str, port: int) -> socket.socket:
     sock.settimeout(10)
     sock.connect((host, port))
 
-    # Send header: sample_rate (uint32) + chunk_size (uint32)
-    header = struct.pack('<II', SAMPLE_RATE, CHUNK_SIZE)
+    header = struct.pack('<II', rate, chunk)
     sock.sendall(header)
 
     log.info("Connecté à %s:%d — header envoyé (rate=%d, chunk=%d)",
-             host, port, SAMPLE_RATE, CHUNK_SIZE)
-    sock.settimeout(None)  # Blocking mode for streaming
+             host, port, rate, chunk)
+    sock.settimeout(None)
     return sock
 
 
@@ -281,13 +292,14 @@ def _close_pcm(pcm):
         pass
 
 
-def stream(host: str, port: int, device: str):
+def stream(host: str, port: int, device: str, rate: int):
     """
     Main streaming loop. ALSA and network errors are handled
     separately so a USB glitch doesn't reconnect the socket (and
     vice versa).
     """
-    pcm = open_capture(device)
+    pcm = open_capture(device, rate)
+    chunk = chunk_size(rate)
     sock = None
     reconnect_delay = RECONNECT_DELAY_S
 
@@ -295,7 +307,7 @@ def stream(host: str, port: int, device: str):
         # (Re)connect socket
         if sock is None:
             try:
-                sock = connect(host, port)
+                sock = connect(host, port, rate, chunk)
                 reconnect_delay = RECONNECT_DELAY_S
                 log.info("Streaming audio...")
             except (ConnectionRefusedError, OSError) as exc:
@@ -308,12 +320,12 @@ def stream(host: str, port: int, device: str):
         try:
             length, data = pcm.read()
         except Exception as exc:
-            # ALSA fault (EIO on USB auto-suspend, unplug, overrun unhandled, etc.)
+            # ALSA fault (USB unplug, overrun unhandled, etc.)
             log.warning("ALSA erreur (%s) — réouverture de la capture", exc)
             _close_pcm(pcm)
             time.sleep(0.2)
             try:
-                pcm = open_capture(device)
+                pcm = open_capture(device, rate)
             except Exception as reopen_exc:
                 log.error("Réouverture impossible: %s — retry dans 2s", reopen_exc)
                 time.sleep(2)
@@ -374,27 +386,34 @@ Exemples:
         list_devices()
         return
 
-    # Auto-detect device if not specified
-    device = args.device
-    if device is None:
-        device = find_capture_device()
-        if device is None:
-            log.error("Aucun micro USB détecté. Utilisez --device ou --list-devices.")
+    # Auto-detect device + rate if not specified
+    if args.device is None:
+        found = find_capture_device()
+        if found is None:
+            log.error("Aucun micro USB utilisable. --list-devices pour diagnostiquer.")
             sys.exit(1)
+        device, rate = found
     else:
-        # Manual --device: also apply the USB autosuspend fix if possible.
+        device = args.device
         idx = _card_index_from_device(device)
         if idx is not None:
             _disable_usb_autosuspend(idx)
+        # Manual device: probe rates to find a native one that works
+        rate = next((r for r in PREFERRED_RATES if _try_capture(device, r)), None)
+        if rate is None:
+            log.error("%s ne supporte aucun des rates %s en natif", device, PREFERRED_RATES)
+            sys.exit(1)
+        log.info("%s retenu @ %dHz (natif)", device, rate)
 
-    log.info("Vision Audio Satellite")
+    chunk = chunk_size(rate)
+    log.info("Vision Satellite")
     log.info("  Serveur: %s:%d", args.host, args.port)
     log.info("  Device:  %s", device)
     log.info("  Format:  %dHz, %dch, int16, chunk=%d (%dms)",
-             SAMPLE_RATE, CHANNELS, CHUNK_SIZE, CHUNK_SIZE * 1000 // SAMPLE_RATE)
+             rate, CHANNELS, chunk, CHUNK_MS)
 
     try:
-        stream(args.host, args.port, device)
+        stream(args.host, args.port, device, rate)
     except KeyboardInterrupt:
         log.info("Arrêt (Ctrl+C)")
 

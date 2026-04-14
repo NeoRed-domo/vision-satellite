@@ -108,7 +108,31 @@ VISION_PORT=$VISION_PORT
 DEVICE_ARG=$DEVICE_ARG
 ENVEOF
 
-# 5bis. Disable USB autosuspend (fix USB mic drops after ~10s on Jetson/Pi)
+# 5a. Neutraliser PulseAudio (concurrence le mic USB sur certains setups,
+#     p.ex. TONOR TM20 → EIO quand gdm lance pulse en parallèle).
+#     Un satellite audio n'en a pas besoin.
+echo -e "${CYAN}▶ Neutralisation PulseAudio...${NC}"
+if [ -f /etc/pulse/client.conf ]; then
+    if ! grep -q "^autospawn\s*=\s*no" /etc/pulse/client.conf; then
+        # Remplace une ligne autospawn existante, sinon append
+        if grep -qE "^\s*;?\s*autospawn\s*=" /etc/pulse/client.conf; then
+            sudo sed -i 's/^\s*;*\s*autospawn\s*=.*/autospawn = no/' /etc/pulse/client.conf
+        else
+            echo "autospawn = no" | sudo tee -a /etc/pulse/client.conf > /dev/null
+        fi
+    fi
+fi
+sudo systemctl --global mask pulseaudio.service pulseaudio.socket 2>/dev/null || true
+# GDM sur headless = consommateur pulse inutile
+for gdm in gdm gdm3; do
+    if systemctl list-unit-files 2>/dev/null | grep -q "^${gdm}.service"; then
+        sudo systemctl stop "$gdm" 2>/dev/null || true
+        sudo systemctl disable "$gdm" 2>/dev/null || true
+    fi
+done
+sudo pkill -9 -f pulseaudio 2>/dev/null || true
+
+# 5b. Disable USB autosuspend (fix USB mic drops after ~10s on Jetson/Pi)
 echo -e "${CYAN}▶ Désactivation USB autosuspend (évite les déconnexions micro)...${NC}"
 # Runtime: take effect immediately
 if [ -f /sys/module/usbcore/parameters/autosuspend ]; then
