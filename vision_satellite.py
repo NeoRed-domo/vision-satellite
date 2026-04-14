@@ -16,6 +16,8 @@ Usage:
   python3 vision_satellite.py --host 192.168.1.100 --device hw:1,0
   python3 vision_satellite.py --host 192.168.1.100 --list-devices
 """
+from __future__ import annotations
+
 import argparse
 import logging
 import os
