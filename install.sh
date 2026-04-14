@@ -74,7 +74,7 @@ fi
 # 2. Install system dependencies
 echo -e "${CYAN}▶ Installation des dépendances système...${NC}"
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3 python3-pip python3-venv libasound2-dev alsa-utils
+sudo apt-get install -y -qq python3 alsa-utils
 
 # 3. Create install directory
 echo -e "${CYAN}▶ Installation dans $INSTALL_DIR...${NC}"
@@ -90,10 +90,7 @@ else
 fi
 sudo chmod +x "$INSTALL_DIR/vision_satellite.py"
 
-# 4. Create venv and install Python deps
-echo -e "${CYAN}▶ Création du venv Python...${NC}"
-sudo python3 -m venv "$INSTALL_DIR/venv"
-sudo "$INSTALL_DIR/venv/bin/pip" install --quiet pyalsaaudio
+# 4. (plus de venv nécessaire — on utilise arecord subprocess, pas pyalsaaudio)
 
 # 5. Create config file
 echo -e "${CYAN}▶ Configuration...${NC}"
@@ -162,7 +159,7 @@ EnvironmentFile=$INSTALL_DIR/config.env
 # HOME writable pour que le plugin ALSA→Pulse (chargé implicitement par
 # libasound2-plugins) puisse créer son dossier sans warning.
 Environment="HOME=$INSTALL_DIR"
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/vision_satellite.py --host \${VISION_HOST} --port \${VISION_PORT} \$DEVICE_ARG
+ExecStart=/usr/bin/python3 $INSTALL_DIR/vision_satellite.py --host \${VISION_HOST} --port \${VISION_PORT} \$DEVICE_ARG
 Restart=always
 RestartSec=5
 StandardOutput=journal
