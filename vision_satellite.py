@@ -19,11 +19,12 @@ Usage:
 import argparse
 import logging
 import os
+import re
 import socket
 import struct
 import sys
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,59 +44,129 @@ RECONNECT_DELAY_S = 2
 MAX_RECONNECT_DELAY_S = 30
 
 
-def find_usb_mic(preferred_names: Optional[List[str]] = None) -> Optional[str]:
+def enumerate_cards() -> List[Tuple[int, str, bool]]:
     """
-    Auto-detect USB microphone ALSA device.
+    Parse /proc/asound/cards and return [(index, description, is_usb), ...].
 
-    Scans /proc/asound/cards for USB audio devices.
-    Returns ALSA device string (e.g., 'hw:1,0') or None.
+    Each entry in the file looks like:
+      2 [Device         ]: USB-Audio - TONOR TM20 Audio Device
+                            TONOR TM20 Audio Device at usb-...
+    We keep both shortname and longname, and mark USB cards via the
+    driver field (USB-Audio) or explicit 'usb' in the longname.
     """
-    preferred = preferred_names or ["TONOR", "TM20", "USB", "Microphone", "Mic"]
-
+    cards = []
     try:
-        import alsaaudio
-        cards = alsaaudio.cards()
-        log.debug("ALSA cards: %s", cards)
+        with open("/proc/asound/cards") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return cards
 
-        # Try preferred names first
-        for i, card in enumerate(cards):
-            for name in preferred:
-                if name.lower() in card.lower():
-                    device = f"hw:{i},0"
-                    log.info("Micro détecté: '%s' → %s", card, device)
-                    return device
+    i = 0
+    while i < len(lines):
+        # First line: " N [shortname      ]: driver - longname"
+        header = re.match(r"\s*(\d+)\s*\[([^\]]+)\]\s*:\s*(\S+)\s*-\s*(.*)", lines[i])
+        if not header:
+            i += 1
+            continue
+        idx = int(header.group(1))
+        shortname = header.group(2).strip()
+        driver = header.group(3).strip()
+        longname = header.group(4).strip()
+        # Second line: usually a full hardware path (may contain "usb-...")
+        extra = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        combined = " ".join([shortname, driver, longname, extra]).lower()
+        is_usb = ("usb-audio" in combined) or ("usb" in extra.lower())
+        desc = "{} [{}]".format(longname or shortname, shortname)
+        cards.append((idx, desc, is_usb))
+        i += 2
+    return cards
 
-        # Fallback: first non-default card (usually USB)
-        if len(cards) > 1:
-            device = f"hw:{1},0"
-            log.info("Micro fallback: '%s' → %s", cards[1], device)
+
+def _can_capture(device: str) -> bool:
+    """Open the device at our target format and try to read one chunk."""
+    import alsaaudio
+    pcm = None
+    try:
+        pcm = alsaaudio.PCM(
+            type=alsaaudio.PCM_CAPTURE,
+            mode=alsaaudio.PCM_NORMAL,
+            device=device,
+        )
+        pcm.setrate(SAMPLE_RATE)
+        pcm.setchannels(CHANNELS)
+        pcm.setformat(alsaaudio.PCM_FORMAT_S16_LE)
+        pcm.setperiodsize(CHUNK_SIZE)
+        length, data = pcm.read()
+        return length > 0 and bool(data)
+    except Exception as exc:
+        log.debug("%s non utilisable: %s", device, exc)
+        return False
+    finally:
+        if pcm is not None:
+            try:
+                pcm.close()
+            except Exception:
+                pass
+
+
+def find_capture_device() -> Optional[str]:
+    """
+    Auto-detect the best working capture device.
+
+    Strategy:
+      1. Enumerate ALSA cards with USB tagging from /proc/asound/cards
+      2. Try USB cards first (priority 0), then onboard (priority 1)
+      3. For each, actually open + read a chunk to verify it works
+      4. Return the first device that passes the read test
+    """
+    cards = enumerate_cards()
+    if not cards:
+        log.error("Aucune carte son détectée (/proc/asound/cards vide ou illisible)")
+        return None
+
+    log.info("Cartes détectées:")
+    for idx, desc, is_usb in cards:
+        log.info("  [%d] %s%s", idx, desc, " (USB)" if is_usb else "")
+
+    candidates = sorted(cards, key=lambda c: (0 if c[2] else 1, c[0]))
+
+    for idx, desc, is_usb in candidates:
+        device = "hw:{},0".format(idx)
+        kind = "USB" if is_usb else "onboard"
+        if _can_capture(device):
+            log.info("Micro sélectionné: %s (%s) → %s", desc, kind, device)
             return device
+        log.warning("  %s (%s) → non utilisable en capture", device, desc)
 
-        # Last resort: default device
-        if cards:
-            log.info("Micro par défaut: '%s' → default", cards[0])
-            return "default"
-
-    except Exception as e:
-        log.warning("Détection auto échouée: %s", e)
-
+    log.error("Aucune carte son capable de capturer en 16kHz mono int16 trouvée.")
+    log.error("Branche un micro USB ou passe --device manuellement.")
     return None
 
 
+# Backward-compatible alias
+find_usb_mic = find_capture_device
+
+
 def list_devices():
-    """List available ALSA capture devices."""
+    """List available ALSA cards with USB tagging and capture capability."""
     try:
-        import alsaaudio
-        print("Cartes ALSA disponibles:")
-        for i, card in enumerate(alsaaudio.cards()):
-            print(f"  [{i}] {card} → hw:{i},0")
-        print()
-        print("Devices PCM capture:")
-        for pcm in alsaaudio.pcms(alsaaudio.PCM_CAPTURE):
-            print(f"  {pcm}")
+        import alsaaudio  # noqa: F401
     except ImportError:
         print("ERREUR: pyalsaaudio non installé. Lancez: pip3 install pyalsaaudio")
         sys.exit(1)
+
+    cards = enumerate_cards()
+    if not cards:
+        print("Aucune carte son détectée.")
+        return
+
+    print("Cartes ALSA:")
+    for idx, desc, is_usb in cards:
+        tag = " (USB)" if is_usb else ""
+        device = "hw:{},0".format(idx)
+        works = _can_capture(device)
+        status = "OK" if works else "KO"
+        print("  [{}] {}{}  → {}  [{}]".format(idx, desc, tag, device, status))
 
 
 def open_capture(device: str):
