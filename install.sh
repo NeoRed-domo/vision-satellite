@@ -120,7 +120,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$INSTALL_DIR/config.env
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/vision_satellite.py --host \${VISION_HOST} --port \${VISION_PORT} \${DEVICE_ARG}
+ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/vision_satellite.py --host \${VISION_HOST} --port \${VISION_PORT} \$DEVICE_ARG
 Restart=always
 RestartSec=5
 StandardOutput=journal
