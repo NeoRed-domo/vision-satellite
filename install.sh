@@ -81,9 +81,50 @@ else
     echo "  Platform: Generic Linux $(uname -m)"
 fi
 
-# 2. Install system deps
+# 2. Install system deps — gère les distros EOL (Buster/Stretch/Jessie) en
+# basculant automatiquement sur les archives + en désactivant le check
+# Valid-Until (les Release.gpg de l'archive ont expiré).
+fix_eol_repos_if_needed() {
+    local apt_log
+    apt_log=$(mktemp)
+    if apt-get update -qq >"$apt_log" 2>&1; then
+        rm -f "$apt_log"
+        return 0
+    fi
+    if ! grep -qE "no longer has a Release file|ne contient plus de fichier Release|n'a plus de fichier Release" "$apt_log"; then
+        # Échec apt-get update pour une autre raison — on ne masque pas
+        cat "$apt_log" >&2
+        rm -f "$apt_log"
+        return 1
+    fi
+    rm -f "$apt_log"
+    local codename=""
+    if [ -f /etc/os-release ]; then
+        codename=$(. /etc/os-release && echo "${VERSION_CODENAME:-}")
+    fi
+    case "$codename" in
+        buster|stretch|jessie|wheezy)
+            echo -e "${YELLOW}▶ Distribution EOL détectée ($codename) — bascule des sources vers les archives...${NC}"
+            sed -i.vision-bak \
+                -e 's|http://raspbian.raspberrypi.org|http://legacy.raspbian.org|g' \
+                -e 's|http://archive.raspberrypi.org|http://archive.raspberrypi.com|g' \
+                -e 's|http://deb.debian.org|http://archive.debian.org|g' \
+                -e 's|http://security.debian.org|http://archive.debian.org|g' \
+                /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null || true
+            cat > /etc/apt/apt.conf.d/99vision-no-check-valid-until <<'APTEOF'
+Acquire::Check-Valid-Until "false";
+APTEOF
+            apt-get update -qq
+            ;;
+        *)
+            echo -e "${RED}apt-get update échoue mais pas de distro EOL connue ($codename) — abandon.${NC}"
+            return 1
+            ;;
+    esac
+}
+
 echo -e "${CYAN}▶ Installation des dépendances système...${NC}"
-apt-get update -qq
+fix_eol_repos_if_needed || exit 1
 PACKAGES="python3 python3-pip python3-venv alsa-utils v4l-utils bluez-tools usbutils nmap"
 if [ -z "$ENROLL_URI" ] || [ "$ASSUME_YES" = false ]; then
     PACKAGES="$PACKAGES whiptail"
