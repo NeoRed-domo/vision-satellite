@@ -33,7 +33,7 @@ def test_do_enroll_success(mock_write, mock_keygen, mock_enroll, mock_caps, mock
         "runtime_uri": "mtls://x:9444",
         "cert_expires_at": "2026-05-14T10:00:00Z",
     }
-    uri = f"vision-enroll://192.168.1.10:9444?token=tok&fp={'a'*64}&name=Salon&v=1"
+    uri = f"vision-enroll://192.168.1.10:9443?token=tok&fp={'a'*64}&name=Salon&v=1"
     config_p = tmp_path / "config.json"
     rc = m.do_enroll(
         uri, key_path=tmp_path / "k", cert_path=tmp_path / "c",

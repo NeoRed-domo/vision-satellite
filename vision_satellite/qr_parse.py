@@ -5,7 +5,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 _FP_RE = re.compile(r"^[0-9a-f]{64}$")
-_DEFAULT_PORT = 9444  # 9443 réservé à Caddy / Control Center côté Vision
+_DEFAULT_PORT = 9443  # POST /enroll passe par Caddy (9443 = HTTPS public côté Vision)
 
 
 def parse_enroll_uri(uri: str) -> dict:
