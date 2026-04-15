@@ -236,13 +236,27 @@ def screen_recap(capabilities: dict, parsed_uri: dict) -> bool:
     return _whiptail_yesno("\n".join(lines))
 
 
+_INSTALL_LOG_PATH = Path("/var/log/vision-satellite-install.log")
+
+
 def screen_install(uri: str) -> bool:
-    """Invoque `python3 -m vision_satellite.main --enroll <uri>`. Returns True si succès."""
+    """Invoque `python3 -m vision_satellite.main --enroll <uri>`.
+
+    Capture stdout+stderr et les écrit dans /var/log/vision-satellite-install.log
+    pour qu'on puisse débugger en cas d'échec (le wizard tourne en TUI, donc
+    on ne peut pas afficher 50 lignes de stack trace).
+    """
     result = subprocess.run(
         ["python3", "-m", "vision_satellite.main", "--enroll", uri],
         capture_output=True, text=True,
         cwd=str(Path(__file__).resolve().parent),
     )
+    try:
+        with _INSTALL_LOG_PATH.open("w") as f:
+            f.write(f"--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}\n")
+            f.write(f"--- returncode: {result.returncode} ---\n")
+    except OSError:
+        pass  # /var/log non-writable — pas bloquant
     return result.returncode == 0
 
 
@@ -254,7 +268,13 @@ def screen_final(success: bool, satellite_name: str = "") -> None:
             "placez ce satellite sur la carte."
         )
     else:
-        msg = "✗ Échec de l'installation. Consultez les logs : journalctl -u vision-satellite"
+        msg = (
+            "✗ Échec de l'enrollment.\n\n"
+            f"Trace complète : cat {_INSTALL_LOG_PATH}\n"
+            "Ou relance en CLI pour voir l'erreur :\n"
+            "  cd /opt/vision-satellite && \\\n"
+            "  sudo python3 -m vision_satellite.main --enroll '<uri>'"
+        )
     _whiptail_msgbox(msg)
 
 
