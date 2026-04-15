@@ -131,9 +131,12 @@ if [ -z "$ENROLL_URI" ] || [ "$ASSUME_YES" = false ]; then
 fi
 apt-get install -y -qq $PACKAGES
 
-# cryptography (Python lib) pour keygen + fingerprint pinning
-pip3 install --quiet --break-system-packages cryptography 2>/dev/null \
-    || pip3 install --quiet cryptography
+# Python deps :
+#   - cryptography : keygen + fingerprint pinning
+#   - typing_extensions : backport de typing.Protocol pour Python 3.7 (Buster).
+#     Inoffensif sur 3.8+ (le module existe mais on ne s'en sert pas).
+pip3 install --quiet --break-system-packages cryptography typing_extensions 2>/dev/null \
+    || pip3 install --quiet cryptography typing_extensions
 
 # 3. Install files
 echo -e "${CYAN}▶ Installation dans $INSTALL_DIR...${NC}"

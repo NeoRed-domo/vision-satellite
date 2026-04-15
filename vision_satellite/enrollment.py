@@ -7,7 +7,10 @@ import logging
 import socket
 import ssl
 from http.client import HTTPSConnection
-from typing import Protocol
+try:
+    from typing import Protocol  # Python 3.8+
+except ImportError:  # pragma: no cover — Python 3.7 (Raspbian Buster)
+    from typing_extensions import Protocol
 from urllib.parse import urlparse
 
 log = logging.getLogger("vision.satellite.enrollment")
