@@ -139,7 +139,19 @@ apt-get install -y -qq $PACKAGES
 pip3 install --quiet --break-system-packages cryptography cbor2 typing_extensions 2>/dev/null \
     || pip3 install --quiet cryptography cbor2 typing_extensions
 
-# 3. Install files
+# 3. Stop le service existant (si présent) : sinon le mic USB est tenu par
+# le runtime et le test audio du wizard retourne "Périphérique occupé".
+# Inoffensif s'il n'existe pas / n'est pas démarré.
+if systemctl list-unit-files 2>/dev/null | grep -q "^${SERVICE_NAME}.service"; then
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo -e "${CYAN}▶ Arrêt du service ${SERVICE_NAME} (libère le mic pour le test)...${NC}"
+        systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+        # Laisse au kernel le temps de libérer le descripteur ALSA
+        sleep 1
+    fi
+fi
+
+# 4. Install files
 echo -e "${CYAN}▶ Installation dans $INSTALL_DIR...${NC}"
 mkdir -p "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
