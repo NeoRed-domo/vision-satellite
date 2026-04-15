@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 
@@ -24,7 +25,8 @@ def generate_keypair(key_path: Path) -> str:
     except (OSError, PermissionError):
         pass
 
-    priv = ec.generate_private_key(ec.SECP256R1())
+    # backend= explicite pour compat cryptography <3.4 (Buster ship 2.6.1)
+    priv = ec.generate_private_key(ec.SECP256R1(), backend=default_backend())
     priv_pem = priv.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
@@ -43,7 +45,7 @@ def generate_keypair(key_path: Path) -> str:
 def load_pubkey(key_path: Path) -> str:
     """Charge la clé privée depuis key_path, retourne la pubkey PEM."""
     priv = serialization.load_pem_private_key(
-        Path(key_path).read_bytes(), password=None
+        Path(key_path).read_bytes(), password=None, backend=default_backend()
     )
     if not isinstance(priv, ec.EllipticCurvePrivateKey):
         raise TypeError(f"{key_path} n'est pas une clé ECDSA")
