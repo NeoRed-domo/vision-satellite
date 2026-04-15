@@ -197,7 +197,7 @@ async def test_hello_and_ack_received(mini_ca):
 @pytest.mark.asyncio
 async def test_uri_parsing_invalid_scheme(mini_ca):
     client = SatelliteRuntimeClient(
-        runtime_uri="http://x:9443",
+        runtime_uri="http://x:9444",
         device_cert_path=mini_ca["cli_cert_path"],
         device_key_path=mini_ca["cli_key_path"],
         vision_ca_path=mini_ca["ca_dir"] / "vision-ca.crt",
@@ -209,7 +209,7 @@ async def test_uri_parsing_invalid_scheme(mini_ca):
 
 def test_ssl_context_loads_certs(mini_ca):
     client = SatelliteRuntimeClient(
-        runtime_uri="mtls://127.0.0.1:9443",
+        runtime_uri="mtls://127.0.0.1:9444",
         device_cert_path=mini_ca["cli_cert_path"],
         device_key_path=mini_ca["cli_key_path"],
         vision_ca_path=mini_ca["ca_dir"] / "vision-ca.crt",

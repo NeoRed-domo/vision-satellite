@@ -30,10 +30,10 @@ def test_do_enroll_success(mock_write, mock_keygen, mock_enroll, mock_caps, mock
         "satellite_id": "sat-1",
         "device_cert_pem": "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
         "vision_ca_pem": "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n",
-        "runtime_uri": "mtls://x:9443",
+        "runtime_uri": "mtls://x:9444",
         "cert_expires_at": "2026-05-14T10:00:00Z",
     }
-    uri = f"vision-enroll://192.168.1.10:9443?token=tok&fp={'a'*64}&name=Salon&v=1"
+    uri = f"vision-enroll://192.168.1.10:9444?token=tok&fp={'a'*64}&name=Salon&v=1"
     config_p = tmp_path / "config.json"
     rc = m.do_enroll(
         uri, key_path=tmp_path / "k", cert_path=tmp_path / "c",
@@ -86,7 +86,7 @@ def test_do_enroll_persists_config(
         "satellite_id": "sat-abc",
         "device_cert_pem": "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n",
         "vision_ca_pem": "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n",
-        "runtime_uri": "mtls://vision.local:9443",
+        "runtime_uri": "mtls://vision.local:9444",
         "cert_expires_at": "2026-05-14T10:00:00Z",
     }
     uri = f"vision-enroll://192.168.1.10?token=t&fp={'a'*64}&name=X"
@@ -102,7 +102,7 @@ def test_do_enroll_persists_config(
     assert rc == 0
     conf = json.loads(config_p.read_text())
     assert conf["satellite_id"] == "sat-abc"
-    assert conf["runtime_uri"] == "mtls://vision.local:9443"
+    assert conf["runtime_uri"] == "mtls://vision.local:9444"
     assert "enrolled_at" in conf
 
 
@@ -124,7 +124,7 @@ def test_do_runtime_launches_client(
     config_p = tmp_path / "config.json"
     config_p.write_text(json.dumps({
         "satellite_id": "sat-xxx",
-        "runtime_uri": "mtls://vision.local:9443",
+        "runtime_uri": "mtls://vision.local:9444",
         "cert_expires_at": "2026-05-14T10:00:00Z",
         "capabilities": {},
         "enrolled_at": "2026-04-14T16:00:00Z",
@@ -145,7 +145,7 @@ def test_do_runtime_launches_client(
     assert rc == 0
     # SatelliteRuntimeClient instantiated with audio_cmd including hw:2,0
     kwargs = mock_client_cls.call_args.kwargs
-    assert kwargs["runtime_uri"] == "mtls://vision.local:9443"
+    assert kwargs["runtime_uri"] == "mtls://vision.local:9444"
     assert kwargs["satellite_id"] == "sat-xxx"
     assert "hw:2,0" in kwargs["audio_cmd"]
     assert "16000" in kwargs["audio_cmd"]

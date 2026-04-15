@@ -71,7 +71,7 @@ def test_screen_detect_capabilities(mock_check, mock_detect):
 @patch("wizard._whiptail_inputbox")
 def test_screen_enroll_uri_valid(mock_input, mock_parse):
     mock_input.return_value = "vision-enroll://x?token=t&fp=" + "a"*64
-    mock_parse.return_value = {"host": "x", "port": 9443, "token": "t", "fingerprint": "a"*64, "name": "", "version": 1}
+    mock_parse.return_value = {"host": "x", "port": 9444, "token": "t", "fingerprint": "a"*64, "name": "", "version": 1}
     uri, parsed = wizard.screen_enroll_uri()
     assert uri.startswith("vision-enroll://")
     assert parsed["host"] == "x"

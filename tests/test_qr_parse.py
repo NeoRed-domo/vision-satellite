@@ -8,10 +8,10 @@ VALID_FP = "a" * 64  # 64 hex chars
 
 
 def test_parse_valid_uri():
-    uri = f"vision-enroll://192.168.1.10:9443?token=xyz&fp={VALID_FP}&name=Salon&v=1"
+    uri = f"vision-enroll://192.168.1.10:9444?token=xyz&fp={VALID_FP}&name=Salon&v=1"
     d = qr_parse.parse_enroll_uri(uri)
     assert d["host"] == "192.168.1.10"
-    assert d["port"] == 9443
+    assert d["port"] == 9444
     assert d["token"] == "xyz"
     assert d["fingerprint"] == VALID_FP
     assert d["name"] == "Salon"
@@ -21,7 +21,7 @@ def test_parse_valid_uri():
 def test_parse_default_port():
     uri = f"vision-enroll://vision.local?token=xyz&fp={VALID_FP}"
     d = qr_parse.parse_enroll_uri(uri)
-    assert d["port"] == 9443  # default
+    assert d["port"] == 9444  # default
 
 
 def test_parse_invalid_scheme_raises():

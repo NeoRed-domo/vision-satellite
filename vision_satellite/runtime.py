@@ -44,7 +44,7 @@ class SatelliteRuntimeClient:
         parsed = urlparse(self.runtime_uri)
         if parsed.scheme != "mtls":
             raise ValueError(f"scheme mtls attendu, got {parsed.scheme}")
-        return parsed.hostname, parsed.port or 9443
+        return parsed.hostname, parsed.port or 9444
 
     def _ssl_context(self) -> ssl.SSLContext:
         ctx = ssl.create_default_context(cafile=str(self.vision_ca_path))

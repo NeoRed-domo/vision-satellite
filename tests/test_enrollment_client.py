@@ -42,13 +42,13 @@ def test_enroll_happy_path():
             "satellite_id": "sat-uuid-xxx",
             "device_cert_pem": "-----BEGIN CERTIFICATE-----\nxxx\n-----END CERTIFICATE-----\n",
             "vision_ca_pem": "-----BEGIN CERTIFICATE-----\nyyy\n-----END CERTIFICATE-----\n",
-            "runtime_uri": "mtls://vision.local:9443",
+            "runtime_uri": "mtls://vision.local:9444",
             "cert_expires_at": "2026-05-14T10:00:00Z",
         },
         peer_fp=VALID_FP,
     )
     result = enrollment.enroll(
-        host="vision.local", port=9443, token="tok",
+        host="vision.local", port=9444, token="tok",
         expected_fingerprint=VALID_FP, pubkey_pem="-----BEGIN PUBLIC KEY-----\nxx\n-----END PUBLIC KEY-----\n",
         hostname="sat-01", mac_addresses=["aa:bb:cc:dd:ee:ff"],
         capabilities={}, satellite_version="1.0.0",
@@ -66,7 +66,7 @@ def test_enroll_fingerprint_mismatch_raises():
     )
     with pytest.raises(enrollment.EnrollmentError, match="MITM|fingerprint"):
         enrollment.enroll(
-            host="x", port=9443, token="t", expected_fingerprint=VALID_FP,
+            host="x", port=9444, token="t", expected_fingerprint=VALID_FP,
             pubkey_pem="x", hostname="x", mac_addresses=["aa:bb:cc:dd:ee:ff"],
             capabilities={}, satellite_version="1.0.0",
             _transport=transport,
@@ -79,7 +79,7 @@ def test_enroll_403_raises():
     )
     with pytest.raises(enrollment.EnrollmentError):
         enrollment.enroll(
-            host="x", port=9443, token="bad", expected_fingerprint=VALID_FP,
+            host="x", port=9444, token="bad", expected_fingerprint=VALID_FP,
             pubkey_pem="x", hostname="x", mac_addresses=["aa:bb:cc:dd:ee:ff"],
             capabilities={}, satellite_version="1.0.0",
             _transport=transport,
@@ -96,7 +96,7 @@ def test_enroll_payload_structure():
         peer_fp=VALID_FP,
     )
     enrollment.enroll(
-        host="x", port=9443, token="t", expected_fingerprint=VALID_FP,
+        host="x", port=9444, token="t", expected_fingerprint=VALID_FP,
         pubkey_pem="PKEY", hostname="my-sat",
         mac_addresses=["aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"],
         capabilities={"audio": {"device": "hw:2,0"}},

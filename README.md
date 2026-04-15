@@ -14,7 +14,7 @@ Compatible **Debian / Ubuntu / Raspberry Pi OS / JetPack**, ARM64 et x86_64.
 
 Dans l'interface admin Vision, ouvre **Satellites** → **+ Nouveau satellite**, donne un nom (ex. "Salon"). Le serveur génère :
 
-- un **QR code** contenant `vision-enroll://IP:9443?token=XXX&fp=YYY&name=Salon&v=1`
+- un **QR code** contenant `vision-enroll://IP:9444?token=XXX&fp=YYY&name=Salon&v=1`
 - ou l'équivalent en copy-paste
 
 Le token est valide **10 minutes** et **one-shot** (usage unique, non-réutilisable).
@@ -41,7 +41,7 @@ Le **wizard interactif** (TUI whiptail) te guide :
 **Mode scripté** (CI / déploiement à distance) :
 
 ```bash
-sudo ./install.sh --enroll 'vision-enroll://IP:9443?token=XXX&fp=YYY&name=Salon&v=1'
+sudo ./install.sh --enroll 'vision-enroll://IP:9444?token=XXX&fp=YYY&name=Salon&v=1'
 # ou
 sudo ./install.sh --yes --enroll '...'
 ```
