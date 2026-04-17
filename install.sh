@@ -156,7 +156,36 @@ echo -e "${CYAN}▶ Installation dans $INSTALL_DIR...${NC}"
 mkdir -p "$INSTALL_DIR"
 chmod 700 "$INSTALL_DIR"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Résoudre le dossier source selon le mode d'invocation :
+#  - Mode local : ./install.sh lancé depuis le clone → BASH_SOURCE pointe sur le script
+#  - Mode remote : curl … | bash → BASH_SOURCE indéfini, il faut downloader le repo
+VISION_SAT_REPO_URL="${VISION_SAT_REPO_URL:-https://github.com/NeoRed-domo/vision-satellite.git}"
+VISION_SAT_BRANCH="${VISION_SAT_BRANCH:-main}"
+
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
+    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+else
+    # Pipe mode (curl … | bash) : clone le repo dans un tmpdir jetable
+    SCRIPT_DIR="$(mktemp -d -t vision-satellite-XXXXXX)"
+    echo -e "${CYAN}▶ Téléchargement du code (curl|bash mode) : $VISION_SAT_REPO_URL (branche $VISION_SAT_BRANCH)...${NC}"
+    if command -v git >/dev/null 2>&1; then
+        git clone --depth 1 --branch "$VISION_SAT_BRANCH" "$VISION_SAT_REPO_URL" "$SCRIPT_DIR" \
+            || { echo -e "${RED}git clone échoué${NC}" >&2; exit 1; }
+    else
+        # Fallback : download tarball via curl
+        TARBALL_URL="${VISION_SAT_REPO_URL%.git}/archive/refs/heads/${VISION_SAT_BRANCH}.tar.gz"
+        curl -fsSL "$TARBALL_URL" | tar xz -C "$SCRIPT_DIR" --strip-components=1 \
+            || { echo -e "${RED}Téléchargement tarball échoué${NC}" >&2; exit 1; }
+    fi
+    trap 'rm -rf "$SCRIPT_DIR"' EXIT
+fi
+
+if [ ! -d "$SCRIPT_DIR/vision_satellite" ] || [ ! -f "$SCRIPT_DIR/wizard.py" ]; then
+    echo -e "${RED}Sources introuvables dans $SCRIPT_DIR (vision_satellite/ + wizard.py attendus)${NC}" >&2
+    exit 1
+fi
+
 # Copie le package + wizard.py
 cp -r "$SCRIPT_DIR/vision_satellite" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/wizard.py" "$INSTALL_DIR/wizard.py"
