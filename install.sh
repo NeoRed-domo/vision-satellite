@@ -295,16 +295,20 @@ SERVICEEOF
 
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME"
-# Ne démarre PAS le service tant que runtime mTLS n'est pas livré (Phase C serveur)
-# systemctl start "$SERVICE_NAME"
+systemctl restart "$SERVICE_NAME"
 
 # 10. Verify
 echo ""
 if [ -f "$INSTALL_DIR/device.crt" ]; then
-    echo -e "${GREEN}✓ Vision Satellite enrollé${NC}"
+    echo -e "${GREEN}✓ Vision Satellite enrollé et démarré${NC}"
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo "  Certs     : $INSTALL_DIR/device.crt, $INSTALL_DIR/vision-ca.crt"
-    echo "  Service   : $SERVICE_NAME (enabled, sera démarré quand le runtime mTLS sera livré)"
+    # Petit status (non fatal)
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        echo "  Service   : $SERVICE_NAME (active)"
+    else
+        echo -e "  Service   : $SERVICE_NAME ${YELLOW}(inactive — journalctl -u $SERVICE_NAME)${NC}"
+    fi
     echo "  Prochaine étape : dans Vision Admin > Maison, placer ce satellite sur la carte."
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 else
